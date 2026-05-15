@@ -1,0 +1,170 @@
+
+<canvas id="c" style="display:block;width:100%;height:580px;background:#000;border-radius:8px;"></canvas>
+<script>
+const canvas = document.getElementById('c');
+const ctx = canvas.getContext('2d');
+let W, H;
+
+function resize() {
+  const rect = canvas.getBoundingClientRect();
+  W = canvas.width = rect.width * devicePixelRatio;
+  H = canvas.height = rect.height * devicePixelRatio;
+  ctx.scale(devicePixelRatio, devicePixelRatio);
+  W = rect.width; H = rect.height;
+  buildNetwork();
+}
+
+const LAYER_DEFS = [3, 5, 7, 9, 9, 9, 9, 7, 5, 3];
+const INPUT_LABELS = ['S', 'T', 'D'];
+const OUTPUT_LABELS = ['STUDY', 'TO', 'DEATH'];
+const CONN_PROB = 0.55;
+const MAX_PARTICLES = 260;
+const SPAWN_EVERY = 42;
+
+let layers = [], connections = [], particles = [];
+let frame = 0;
+
+function buildNetwork() {
+  layers = []; connections = []; particles = [];
+  const mx = W * 0.08, uw = W - mx * 2;
+  const lg = uw / (LAYER_DEFS.length - 1);
+  LAYER_DEFS.forEach((count, li) => {
+    const x = mx + li * lg;
+    const neurons = [];
+    const uh = H * 0.72, top = H * 0.14;
+    for (let ni = 0; ni < count; ni++) {
+      neurons.push({ x, y: top + (uh / (count + 1)) * (ni + 1), r: 6, layer: li, idx: ni, glow: 0 });
+    }
+    layers.push({ x, neurons });
+  });
+  for (let li = 0; li < layers.length - 1; li++) {
+    layers[li].neurons.forEach(a => {
+      layers[li + 1].neurons.forEach(b => {
+        const force = (LAYER_DEFS[li] <= 3 || LAYER_DEFS[li + 1] <= 3);
+        if (force || Math.random() < CONN_PROB) connections.push({ a, b });
+      });
+    });
+  }
+}
+
+function spawnWave() {
+  if (particles.length > MAX_PARTICLES) return;
+  layers[0].neurons.forEach(n => {
+    n.glow = 1.0;
+    connections.filter(c => c.a === n).forEach(conn => {
+      particles.push({ conn, t: 0, speed: 0.022 + Math.random() * 0.008 });
+    });
+  });
+}
+
+function updateParticles() {
+  const arrived = [];
+  particles.forEach((p, i) => {
+    p.t += p.speed;
+    if (p.t >= 1) arrived.push(i);
+  });
+  const toAdd = [];
+  arrived.reverse().forEach(i => {
+    const p = particles[i];
+    const dest = p.conn.b;
+    dest.glow = Math.min(1.0, dest.glow + 0.85);
+    if (particles.length < MAX_PARTICLES) {
+      connections.filter(c => c.a === dest).forEach(conn => {
+        toAdd.push({ conn, t: 0, speed: 0.022 + Math.random() * 0.008 });
+      });
+    }
+    particles.splice(i, 1);
+  });
+  toAdd.forEach(p => particles.push(p));
+}
+
+function drawConnections() {
+  connections.forEach(({ a, b }) => {
+    ctx.beginPath();
+    ctx.moveTo(a.x, a.y);
+    ctx.lineTo(b.x, b.y);
+    ctx.strokeStyle = 'rgba(255,255,255,0.07)';
+    ctx.lineWidth = 0.4;
+    ctx.stroke();
+  });
+}
+
+function drawParticles() {
+  particles.forEach(p => {
+    const { a, b } = p.conn;
+    const et = p.t < 0.5 ? 2 * p.t * p.t : -1 + (4 - 2 * p.t) * p.t;
+    const px = a.x + (b.x - a.x) * et;
+    const py = a.y + (b.y - a.y) * et;
+
+    const g = ctx.createRadialGradient(px, py, 0, px, py, 9);
+    g.addColorStop(0, 'rgba(255,255,255,0.28)');
+    g.addColorStop(1, 'rgba(255,255,255,0)');
+    ctx.beginPath(); ctx.arc(px, py, 9, 0, Math.PI * 2);
+    ctx.fillStyle = g; ctx.fill();
+
+    ctx.beginPath(); ctx.arc(px, py, 2.2, 0, Math.PI * 2);
+    ctx.fillStyle = '#fff'; ctx.fill();
+  });
+}
+
+function drawNodes() {
+  layers.forEach(layer => {
+    layer.neurons.forEach(n => {
+      if (n.glow > 0) {
+        const gr = n.r + 12 * n.glow;
+        const grad = ctx.createRadialGradient(n.x, n.y, n.r * 0.4, n.x, n.y, gr);
+        grad.addColorStop(0, `rgba(255,255,255,${0.38 * n.glow})`);
+        grad.addColorStop(1, 'rgba(255,255,255,0)');
+        ctx.beginPath(); ctx.arc(n.x, n.y, gr, 0, Math.PI * 2);
+        ctx.fillStyle = grad; ctx.fill();
+        n.glow = Math.max(0, n.glow - 0.018);
+      }
+      ctx.beginPath(); ctx.arc(n.x, n.y, n.r, 0, Math.PI * 2);
+      ctx.fillStyle = n.glow > 0.25 ? '#fff' : '#000';
+      ctx.strokeStyle = 'rgba(255,255,255,0.85)';
+      ctx.lineWidth = 1.4;
+      ctx.fill(); ctx.stroke();
+    });
+  });
+}
+
+function drawLabels() {
+  const lastIdx = layers.length - 1;
+  layers.forEach((layer, li) => {
+    layer.neurons.forEach((n, ni) => {
+      if (li === 0 && ni < INPUT_LABELS.length) {
+        ctx.font = 'bold 10px monospace';
+        ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+        ctx.fillStyle = n.glow > 0.25 ? '#000' : '#fff';
+        ctx.fillText(INPUT_LABELS[ni], n.x, n.y);
+      }
+      if (li === lastIdx && ni < OUTPUT_LABELS.length) {
+        ctx.font = 'bold 8px monospace';
+        ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
+        ctx.fillStyle = `rgba(255,255,255,${0.35 + n.glow * 0.65})`;
+        ctx.fillText(OUTPUT_LABELS[ni], n.x + n.r + 5, n.y);
+      }
+    });
+  });
+}
+
+function loop() {
+  requestAnimationFrame(loop);
+  ctx.fillStyle = '#000';
+  ctx.fillRect(0, 0, W, H);
+
+  if (frame % SPAWN_EVERY === 0) spawnWave();
+  updateParticles();
+
+  drawConnections();
+  drawParticles();
+  drawNodes();
+  drawLabels();
+  frame++;
+}
+
+window.addEventListener('resize', () => { resize(); });
+resize();
+spawnWave();
+loop();
+</script>
