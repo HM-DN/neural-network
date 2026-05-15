@@ -1,2 +1,2 @@
-2d and 3d visualization of neural networks
+2D and 3D visualization of neural networks
 and some chaotic systems
