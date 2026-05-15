@@ -1,0 +1,126 @@
+
+<h2 class="sr-only">Hyper-chaotic neural network — white nodes spawn randomly across a black canvas, connect with glowing lines, and dissolve in an endless chaotic cycle</h2>
+<div style="display:flex;justify-content:center;align-items:flex-start;background:#000;margin:0;padding:0;width:100%;">
+<canvas id="c" style="display:block;"></canvas>
+</div>
+<script>
+const canvas = document.getElementById('c');
+const ctx = canvas.getContext('2d');
+const W = 405, H = 720;
+canvas.width = W;
+canvas.height = H;
+canvas.style.width = '100%';
+canvas.style.maxWidth = '405px';
+canvas.style.height = 'auto';
+
+let nodes = [];
+const MAX_NODES = 140;
+const BASE_DIST = 160;
+const BASE_DIST_SQ = BASE_DIST * BASE_DIST;
+const HUB_DIST = 290;
+const HUB_DIST_SQ = HUB_DIST * HUB_DIST;
+
+function Node(x, y) {
+  this.x = (x !== undefined) ? x : Math.random() * W;
+  this.y = (y !== undefined) ? y : Math.random() * H;
+  var spd = 0.18 + Math.random() * (Math.random() < 0.12 ? 3.5 : 0.9);
+  var ang = Math.random() * Math.PI * 2;
+  this.vx = Math.cos(ang) * spd;
+  this.vy = Math.sin(ang) * spd;
+  this.life = 0;
+  this.maxLife = 8 + Math.random() * 38;
+  this.hub = Math.random() < 0.08;
+}
+
+function spawnBurst(cx, cy, n) {
+  for (var i = 0; i < n && nodes.length < MAX_NODES; i++) {
+    var nd = new Node(
+      cx + (Math.random()-0.5)*90,
+      cy + (Math.random()-0.5)*90
+    );
+    nd.maxLife = 6 + Math.random() * 28;
+    nodes.push(nd);
+  }
+}
+
+var frame = 0;
+
+function loop() {
+  requestAnimationFrame(loop);
+  frame++;
+
+  ctx.fillStyle = 'rgba(0,0,0,0.26)';
+  ctx.fillRect(0, 0, W, H);
+
+  var batch = 5 + Math.floor(Math.random() * 12);
+  for (var i = 0; i < batch && nodes.length < MAX_NODES; i++) {
+    nodes.push(new Node());
+  }
+  if (Math.random() < 0.07) {
+    spawnBurst(Math.random()*W, Math.random()*H, 7 + Math.floor(Math.random()*15));
+  }
+  if (Math.random() < 0.03) {
+    spawnBurst(Math.random()*W, Math.random()*H, 15 + Math.floor(Math.random()*20));
+  }
+
+  var live = [];
+  for (var k = 0; k < nodes.length; k++) {
+    var nd = nodes[k];
+    nd.x += nd.vx; nd.y += nd.vy; nd.life++;
+    if (nd.life < nd.maxLife) live.push(nd);
+  }
+  nodes = live;
+
+  var gA = [], gB = [], gC = [], gD = [];
+
+  for (var i = 0; i < nodes.length; i++) {
+    var a = nodes[i];
+    for (var j = i+1; j < nodes.length; j++) {
+      var b = nodes[j];
+      var dx = b.x-a.x, dy = b.y-a.y;
+      var d2 = dx*dx+dy*dy;
+      var maxSq = (a.hub || b.hub) ? HUB_DIST_SQ : BASE_DIST_SQ;
+      if (d2 < maxSq && d2 > 0.5) {
+        var prox = 1 - Math.sqrt(d2)/Math.sqrt(maxSq);
+        if (prox > 0.65) {
+          gA.push(a.x,a.y,b.x,b.y);
+          gB.push(a.x,a.y,b.x,b.y);
+          gC.push(a.x,a.y,b.x,b.y);
+          gD.push(a.x,a.y,b.x,b.y);
+        } else if (prox > 0.38) {
+          gB.push(a.x,a.y,b.x,b.y);
+          gC.push(a.x,a.y,b.x,b.y);
+          gD.push(a.x,a.y,b.x,b.y);
+        } else if (prox > 0.15) {
+          gC.push(a.x,a.y,b.x,b.y);
+          gD.push(a.x,a.y,b.x,b.y);
+        } else {
+          gD.push(a.x,a.y,b.x,b.y);
+        }
+      }
+    }
+  }
+
+  function draw(arr, lw, style) {
+    if (!arr.length) return;
+    ctx.beginPath();
+    for (var i = 0; i < arr.length; i += 4) {
+      ctx.moveTo(arr[i], arr[i+1]);
+      ctx.lineTo(arr[i+2], arr[i+3]);
+    }
+    ctx.lineWidth = lw;
+    ctx.strokeStyle = style;
+    ctx.stroke();
+  }
+
+  ctx.lineCap = 'round';
+  draw(gA, 18, 'rgba(255,255,255,0.018)');
+  draw(gB, 7,  'rgba(255,255,255,0.05)');
+  draw(gC, 2.5,'rgba(255,255,255,0.13)');
+  draw(gD, 0.45,'rgba(255,255,255,0.8)');
+}
+
+ctx.fillStyle = '#000';
+ctx.fillRect(0, 0, W, H);
+loop();
+</script>
