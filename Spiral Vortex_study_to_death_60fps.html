@@ -1,0 +1,310 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no" />
+<title>Spiral Vortex - study to death</title>
+<style>
+  html,body{margin:0;width:100%;height:100%;overflow:hidden;background:#fff}
+  canvas{display:block;width:100vw;height:100vh;background:#fff}
+</style>
+</head>
+<body>
+<canvas id="cv"></canvas>
+<script>
+(function(){
+  const cv = document.getElementById('cv');
+  const ctx = cv.getContext('2d', { alpha: false });
+
+  // Smaller internal buffer = much less work per frame, but still fills the screen.
+  const CW = 720, CH = 1280;
+  const MX = CW / 2, MY = CH / 2;
+  const FOV = 620;
+
+  cv.width = CW;
+  cv.height = CH;
+  ctx.imageSmoothingEnabled = false;
+
+  let camY = 0, camX = 0.18, tick = 0, last = performance.now();
+  let cY = 1, sY = 0, cX = 1, sX = 0;
+
+  const TMP1 = {sx:0, sy:0, s:0, rz:0};
+  const TMP2 = {sx:0, sy:0, s:0, rz:0};
+
+  function project(x, y, z, out){
+    // rotate Y
+    const x1 = x * cY + z * sY;
+    const z1 = -x * sY + z * cY;
+
+    // rotate X
+    const y2 = y * cX - z1 * sX;
+    const z2 = y * sX + z1 * cX;
+
+    const s = FOV / (FOV + z2 + 900);
+    out.sx = MX + x1 * s;
+    out.sy = MY + y2 * s;
+    out.s = s;
+    out.rz = z2;
+    return out;
+  }
+
+  // ── Symbols ──────────────────────────────────────────────────
+  const S = ['STUDY', 'TO', 'DEATH'];
+
+  const parts = [];
+  function spawnPart(){
+    const r = 220 + Math.random() * 720;
+    const th = Math.random() * Math.PI * 2;
+    const ph = (Math.random() - 0.5) * Math.PI * 0.92;
+    parts.push({
+      txt: S[(Math.random() * 3) | 0],
+      x: r * Math.cos(ph) * Math.cos(th),
+      y: r * Math.cos(ph) * Math.sin(th) * 2.15,
+      z: r * Math.sin(ph),
+      vx: (Math.random() - 0.5) * 0.18,
+      vy: (Math.random() - 0.5) * 0.12,
+      vz: (Math.random() - 0.5) * 0.18,
+      life: 0,
+      maxL: 220 + Math.random() * 260,
+      sz: 18 + Math.random() * 22
+    });
+  }
+  for(let i=0;i<180;i++) spawnPart();
+
+  // ── Matrix rain ───────────────────────────────────────────────
+  const matCols = [];
+  for(let mc=0; mc<18; mc++){
+    matCols.push({
+      bx: -500 + mc * 58 + Math.random() * 20,
+      by: -860 + Math.random() * 180,
+      bz: -200 + Math.random() * 100,
+      digs: Array.from({length: 42}, () => (Math.random() * 10) | 0),
+      sp: 0.45 + Math.random() * 0.95
+    });
+  }
+
+  // ── Sine waves ────────────────────────────────────────────────
+  const waves = [
+    {ox:-360,oz:-120,amp: 96,fr:0.020,ph:0.0},
+    {ox: 180,oz: 210,amp: 68,fr:0.036,ph:1.4},
+    {ox:-120,oz: 120,amp:118,fr:0.015,ph:2.6},
+    {ox: 120,oz:-250,amp: 84,fr:0.028,ph:0.8},
+    {ox:-270,oz: 180,amp: 62,fr:0.042,ph:3.2},
+    {ox: 300,oz:-160,amp: 78,fr:0.024,ph:1.8}
+  ];
+
+  // ── Dashed long-range connections ─────────────────────────────
+  const llines = [];
+  function addLL(){
+    if(parts.length < 2) return;
+    const a = parts[(Math.random() * parts.length) | 0];
+    const b = parts[(Math.random() * parts.length) | 0];
+    llines.push({
+      fx:a.x, fy:a.y, fz:a.z,
+      tx:b.x, ty:b.y, tz:b.z,
+      life:0, maxL:100 + Math.random() * 100
+    });
+  }
+  for(let i=0;i<16;i++) addLL();
+
+  // ── Orbit rings ───────────────────────────────────────────────
+  const orbs = [
+    {rx:360,ry:  0,rz:220,sp:0.006,ph:0.0},
+    {rx:  0,ry:320,rz:320,sp:0.009,ph:2.1},
+    {rx:280,ry:280,rz:  0,sp:0.007,ph:1.0},
+    {rx:430,ry:190,rz:190,sp:0.005,ph:0.5},
+    {rx:190,ry:430,rz:160,sp:0.008,ph:3.7}
+  ];
+
+  // ── Floating dots ─────────────────────────────────────────────
+  const dots = [];
+  function addDot(){
+    const r = 140 + Math.random() * 420;
+    const th = Math.random() * Math.PI * 2;
+    const ph = (Math.random() - 0.5) * Math.PI * 0.9;
+    dots.push({
+      x: r * Math.cos(ph) * Math.cos(th),
+      y: r * Math.cos(ph) * Math.sin(th) * 1.8,
+      z: r * Math.sin(ph),
+      vx: (Math.random() - 0.5) * 0.28,
+      vy: (Math.random() - 0.5) * 0.22,
+      vz: (Math.random() - 0.5) * 0.28,
+      life: 0,
+      maxL: 150 + Math.random() * 160,
+      r: 1.4 + Math.random() * 2.8
+    });
+  }
+  for(let i=0;i<60;i++) addDot();
+
+  function draw(now){
+    const dt = Math.min(2.2, (now - last) / 16.67);
+    last = now;
+
+    ctx.fillStyle = '#ffffff';
+    ctx.fillRect(0, 0, CW, CH);
+
+    tick += dt;
+    camY = tick * 0.0021;
+    camX = 0.15 + Math.sin(tick * 0.00075) * 0.13;
+    cY = Math.cos(camY); sY = Math.sin(camY);
+    cX = Math.cos(camX); sX = Math.sin(camX);
+
+    // Grid
+    ctx.strokeStyle = 'rgba(26,26,26,0.022)';
+    ctx.lineWidth = 1;
+    for(let gx=-500; gx<=500; gx+=72){
+      project(gx, -860, -100, TMP1);
+      project(gx,  860, -100, TMP2);
+      ctx.beginPath();
+      ctx.moveTo(TMP1.sx, TMP1.sy);
+      ctx.lineTo(TMP2.sx, TMP2.sy);
+      ctx.stroke();
+    }
+    for(let gy=-860; gy<=860; gy+=72){
+      project(-500, gy, -100, TMP1);
+      project( 500, gy, -100, TMP2);
+      ctx.beginPath();
+      ctx.moveTo(TMP1.sx, TMP1.sy);
+      ctx.lineTo(TMP2.sx, TMP2.sy);
+      ctx.stroke();
+    }
+
+    // Orbit rings
+    ctx.strokeStyle = 'rgba(26,26,26,0.04)';
+    ctx.lineWidth = 1;
+    for(let i=0;i<orbs.length;i++){
+      const o = orbs[i];
+      ctx.beginPath();
+      for(let k=0;k<=54;k++){
+        const a = (k / 54) * Math.PI * 2 + tick * o.sp + o.ph;
+        project(
+          o.rx * Math.cos(a),
+          o.ry * Math.sin(a) * 1.4,
+          o.rz * Math.sin(a) * 0.5,
+          TMP1
+        );
+        if(k===0) ctx.moveTo(TMP1.sx, TMP1.sy);
+        else ctx.lineTo(TMP1.sx, TMP1.sy);
+      }
+      ctx.stroke();
+      const da = tick * o.sp + o.ph;
+      project(
+        o.rx * Math.cos(da),
+        o.ry * Math.sin(da) * 1.4,
+        o.rz * Math.sin(da) * 0.5,
+        TMP1
+      );
+      ctx.fillStyle = 'rgba(26,26,26,0.55)';
+      ctx.beginPath();
+      ctx.arc(TMP1.sx, TMP1.sy, 5 * TMP1.s, 0, Math.PI * 2);
+      ctx.fill();
+    }
+
+    // Sine waves
+    ctx.strokeStyle = 'rgba(26,26,26,0.05)';
+    ctx.lineWidth = 1.2;
+    for(let wi=0; wi<waves.length; wi++){
+      const w = waves[wi];
+      ctx.beginPath();
+      let first = true;
+      for(let px=-420; px<=420; px+=7){
+        const py = w.amp * Math.sin(px * w.fr + tick * 0.018 + w.ph);
+        project(w.ox + px, py, w.oz, TMP1);
+        if(first){ ctx.moveTo(TMP1.sx, TMP1.sy); first = false; }
+        else ctx.lineTo(TMP1.sx, TMP1.sy);
+      }
+      ctx.stroke();
+    }
+
+    // Long-range lines
+    ctx.setLineDash([6, 10]);
+    for(let li=llines.length-1; li>=0; li--){
+      const ll = llines[li];
+      ll.life += dt;
+      if(ll.life > ll.maxL){
+        llines.splice(li,1);
+        if(llines.length < 16) addLL();
+        continue;
+      }
+      const fa = Math.min(ll.life / 20, 1) * Math.min((ll.maxL - ll.life) / 20, 1);
+      project(ll.fx, ll.fy, ll.fz, TMP1);
+      project(ll.tx, ll.ty, ll.tz, TMP2);
+      ctx.strokeStyle = 'rgba(26,26,26,' + (fa * 0.12) + ')';
+      ctx.lineWidth = 0.9;
+      ctx.beginPath();
+      ctx.moveTo(TMP1.sx, TMP1.sy);
+      ctx.lineTo(TMP2.sx, TMP2.sy);
+      ctx.stroke();
+    }
+    ctx.setLineDash([]);
+
+    // Dots
+    for(let di=dots.length-1; di>=0; di--){
+      const d = dots[di];
+      d.life += dt;
+      d.x += d.vx * dt;
+      d.y += d.vy * dt;
+      d.z += d.vz * dt;
+      if(d.life > d.maxL){
+        dots.splice(di, 1);
+        if(dots.length < 60) addDot();
+        continue;
+      }
+      const fade = Math.min(d.life / 20, 1) * Math.min((d.maxL - d.life) / 20, 1);
+      project(d.x, d.y, d.z, TMP1);
+      ctx.fillStyle = 'rgba(26,26,26,' + (fade * 0.68) + ')';
+      ctx.beginPath();
+      ctx.arc(TMP1.sx, TMP1.sy, d.r * TMP1.s, 0, Math.PI * 2);
+      ctx.fill();
+    }
+
+    // Matrix rain
+    for(let ci=0; ci<matCols.length; ci++){
+      const col = matCols[ci];
+      col.by += col.sp * dt * 1.7;
+      if(col.by > 900) col.by = -900;
+      ctx.font = '12px monospace';
+      for(let i=0; i<col.digs.length; i++){
+        const py3 = col.by + i * 20;
+        if(py3 < -920 || py3 > 980) continue;
+        project(col.bx, py3, col.bz, TMP1);
+        const al = 0.05 + 0.025 * Math.sin(i * 0.45 + tick * 0.038);
+        ctx.fillStyle = 'rgba(26,26,26,' + al + ')';
+        const fs = Math.max(8, 12 * TMP1.s);
+        if(ctx.font !== fs + 'px monospace') ctx.font = fs + 'px monospace';
+        ctx.fillText(String(col.digs[i]), TMP1.sx, TMP1.sy);
+      }
+      if((tick * 0.5) % 5 < dt){
+        col.digs[(Math.random() * col.digs.length) | 0] = (Math.random() * 10) | 0;
+      }
+    }
+
+    // Text particles
+    const dead = [];
+    for(let i=0; i<parts.length; i++){
+      const p = parts[i];
+      p.life += dt;
+      p.x += p.vx * dt;
+      p.y += p.vy * dt;
+      p.z += p.vz * dt;
+      if(p.life > p.maxL){ dead.push(i); continue; }
+      project(p.x, p.y, p.z, TMP1);
+      const fade = Math.min(p.life / 22, 1) * Math.min((p.maxL - p.life) / 22, 1);
+      const al = fade * Math.min(0.72, TMP1.s * 1.25);
+      const fs = Math.max(10, p.sz * TMP1.s);
+      ctx.font = fs + 'px monospace';
+      ctx.fillStyle = 'rgba(26,26,26,' + al + ')';
+      ctx.fillText(p.txt, TMP1.sx, TMP1.sy);
+    }
+
+    for(let i=dead.length-1; i>=0; i--) parts.splice(dead[i], 1);
+    while(parts.length < 180) spawnPart();
+
+    requestAnimationFrame(draw);
+  }
+
+  requestAnimationFrame(draw);
+})();
+</script>
+</body>
+</html>
