@@ -1,0 +1,350 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>3D Rotating Neural Network</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { background: #fff; overflow: hidden; width: 100vw; height: 100vh; }
+    canvas { display: block; }
+  </style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<script>
+const canvas = document.getElementById('c');
+const ctx = canvas.getContext('2d');
+let W = canvas.width = window.innerWidth;
+let H = canvas.height = window.innerHeight;
+
+window.addEventListener('resize', () => {
+  W = canvas.width = window.innerWidth;
+  H = canvas.height = window.innerHeight;
+  init();
+});
+
+const LAYER_DEFS    = [3, 5, 7, 9, 9, 9, 9, 7, 5, 3];
+const INPUT_LABELS  = ['S', 'T', 'D'];
+const OUTPUT_LABELS = ['STUDY', 'TO', 'DEATH'];
+const BRANCH_CUTOFF = 3;
+const MAX_SIGNALS   = 55;
+const SPAWN_EVERY   = 5;
+const BASE_SPEED    = 0.013;
+const SPEED_VAR     = 0.006;
+
+// Drift tuning — how far and how fast nodes wander
+const DRIFT_AMP_XY  = 18;   // max pixel drift in X/Y
+const DRIFT_AMP_Z   = 28;   // max drift in Z (depth)
+const DRIFT_FREQ_LO = 0.3;  // slowest oscillation (rad/s equivalent)
+const DRIFT_FREQ_HI = 0.9;  // fastest oscillation
+
+let layers = [], connections = [], streams = [], signals = [], allNeurons = [];
+let angle = 0;
+
+// ── Build geometry ───────────────────────────────────────────────────────
+function buildNetwork() {
+  layers = []; connections = []; allNeurons = [];
+
+  const margin  = W * 0.09;
+  const usableW = W - margin * 2;
+  const gap     = usableW / (LAYER_DEFS.length - 1);
+
+  LAYER_DEFS.forEach((count, li) => {
+    const x       = margin + li * gap;
+    const usableH = H * 0.70;
+    const top     = H * 0.15;
+    const neurons = [];
+
+    for (let ni = 0; ni < count; ni++) {
+      const y = top + (usableH / (count + 1)) * (ni + 1);
+
+      const baseX = x - W / 2;
+      const baseY = y - H / 2;
+      const baseZ = (Math.random() - 0.5) * usableW * 0.5;
+
+      // ── Per-neuron drift parameters (3 independent sine waves per axis) ──
+      const drift = {
+        // X drift
+        xAmp:   (Math.random() * 0.7 + 0.3) * DRIFT_AMP_XY,
+        xFreq:  DRIFT_FREQ_LO + Math.random() * (DRIFT_FREQ_HI - DRIFT_FREQ_LO),
+        xPhase: Math.random() * Math.PI * 2,
+        // Y drift
+        yAmp:   (Math.random() * 0.7 + 0.3) * DRIFT_AMP_XY,
+        yFreq:  DRIFT_FREQ_LO + Math.random() * (DRIFT_FREQ_HI - DRIFT_FREQ_LO),
+        yPhase: Math.random() * Math.PI * 2,
+        // Z drift (depth wobble adds parallax feel)
+        zAmp:   (Math.random() * 0.6 + 0.4) * DRIFT_AMP_Z,
+        zFreq:  DRIFT_FREQ_LO + Math.random() * (DRIFT_FREQ_HI - DRIFT_FREQ_LO) * 0.6,
+        zPhase: Math.random() * Math.PI * 2,
+      };
+
+      const neuron = {
+        baseX, baseY, baseZ,
+        drift,
+        r: 7, glow: 0,
+        x: 0, y: 0, z: 0, scale: 1
+      };
+
+      if (li === 0 && ni < INPUT_LABELS.length) {
+        neuron.label = INPUT_LABELS[ni];
+        neuron.labelSize = 10;
+        neuron.labelAlign = 'center';
+      } else if (li === LAYER_DEFS.length - 1 && ni < OUTPUT_LABELS.length) {
+        neuron.label = OUTPUT_LABELS[ni];
+        neuron.labelSize = 9;
+        neuron.labelAlign = 'left';
+      }
+
+      neurons.push(neuron);
+      allNeurons.push(neuron);
+    }
+    layers.push({ neurons });
+  });
+
+  for (let li = 0; li < layers.length - 1; li++) {
+    layers[li].neurons.forEach(a => {
+      layers[li + 1].neurons.forEach(b => {
+        const forceAll = (LAYER_DEFS[li] <= 3 || LAYER_DEFS[li + 1] <= 3);
+        if (forceAll || Math.random() < 0.52) {
+          connections.push({ a, b, layer: li, glow: 0 });
+        }
+      });
+    });
+  }
+}
+
+// ── Build streams ────────────────────────────────────────────────────────
+function buildStreams() {
+  streams = [];
+
+  function recurse(neuron, li, path) {
+    if (li === LAYER_DEFS.length - 1) {
+      if (path.length > 0) streams.push(path);
+      return;
+    }
+    const outs = connections.filter(c => c.a === neuron);
+    if (!outs.length) return;
+
+    if (li < BRANCH_CUTOFF) {
+      const maxFan = li <= 1 ? outs.length : Math.min(outs.length, 3);
+      outs.slice().sort(() => Math.random() - 0.5).slice(0, maxFan)
+          .forEach(conn => recurse(conn.b, li + 1, [...path, conn]));
+    } else {
+      const conn = outs[Math.floor(Math.random() * outs.length)];
+      recurse(conn.b, li + 1, [...path, conn]);
+    }
+  }
+
+  layers[0].neurons.forEach(n => recurse(n, 0, []));
+}
+
+// ── Signals ──────────────────────────────────────────────────────────────
+function makeSignal(streamIdx, startProgress) {
+  return {
+    si:       streamIdx,
+    progress: startProgress ?? 0,
+    speed:    BASE_SPEED + Math.random() * SPEED_VAR,
+  };
+}
+
+function spawnSignal() {
+  if (!streams.length) return;
+  const si = Math.floor(Math.random() * streams.length);
+  signals.push(makeSignal(si, 0));
+}
+
+function preloadSignals() {
+  signals = [];
+  const count = Math.min(MAX_SIGNALS, streams.length);
+  for (let i = 0; i < count; i++) {
+    const si = i % streams.length;
+    const progress = (streams[si].length * i) / count % streams[si].length;
+    signals.push(makeSignal(si, progress));
+  }
+}
+
+function init() {
+  buildNetwork();
+  buildStreams();
+  preloadSignals();
+}
+init();
+
+// ── Draw helpers ──────────────────────────────────────────────────────────
+function getPosOnStream(stream, progress) {
+  const ci  = Math.min(Math.floor(progress), stream.length - 1);
+  const t   = progress - Math.floor(progress);
+  const c   = stream[ci];
+  return {
+    x: c.a.x + (c.b.x - c.a.x) * t,
+    y: c.a.y + (c.b.y - c.a.y) * t,
+    conn: c, t, ci,
+  };
+}
+
+function drawSingleConnection(c) {
+  ctx.beginPath();
+  ctx.moveTo(c.a.x, c.a.y);
+  ctx.lineTo(c.b.x, c.b.y);
+  const g = c.glow;
+  ctx.strokeStyle = g > 0 ? `rgba(0,0,0,${0.07 + g * 0.22})` : 'rgba(0,0,0,0.07)';
+  const avgScale = (c.a.scale + c.b.scale) / 2;
+  ctx.lineWidth   = (g > 0 ? 0.85 : 0.45) * avgScale;
+  ctx.stroke();
+}
+
+function drawSingleNeuron(n) {
+  const g = n.glow;
+  const r = n.r * n.scale;
+
+  if (g > 0.05) {
+    ctx.beginPath();
+    ctx.arc(n.x, n.y, r + 6 * g * n.scale, 0, Math.PI * 2);
+    ctx.fillStyle = `rgba(0,0,0,${0.06 * g})`;
+    ctx.fill();
+  }
+
+  ctx.beginPath();
+  ctx.arc(n.x, n.y, r, 0, Math.PI * 2);
+  ctx.fillStyle   = g > 0.3 ? `rgba(0,0,0,${0.15 + g * 0.85})` : '#fff';
+  ctx.strokeStyle = `rgba(0,0,0,${0.4 + g * 0.6})`;
+  ctx.lineWidth   = (1.4 + g * 0.6) * n.scale;
+  ctx.fill();
+  ctx.stroke();
+
+  if (n.label) {
+    ctx.font         = `bold ${Math.max(1, n.labelSize * n.scale)}px monospace`;
+    ctx.textAlign    = n.labelAlign;
+    ctx.textBaseline = 'middle';
+    let lx = n.x;
+    if (n.labelAlign === 'left') {
+      lx += r + 5 * n.scale;
+      ctx.fillStyle = '#000';
+    } else {
+      ctx.fillStyle = n.glow > 0.4 ? '#fff' : '#000';
+    }
+    ctx.fillText(n.label, lx, n.y);
+  }
+}
+
+function drawSingleSignal(sig, pos) {
+  const { x, y, conn, t } = pos;
+
+  const trailT  = Math.max(0, t - 0.14);
+  const trailX  = conn.a.x + (conn.b.x - conn.a.x) * trailT;
+  const trailY  = conn.a.y + (conn.b.y - conn.a.y) * trailT;
+  const avgScale = conn.a.scale + (conn.b.scale - conn.a.scale) * t;
+
+  ctx.beginPath();
+  ctx.moveTo(trailX, trailY);
+  ctx.lineTo(x, y);
+  ctx.strokeStyle = `rgba(0,0,0,${0.28 * (1 - t * 0.35)})`;
+  ctx.lineWidth   = 1.3 * avgScale;
+  ctx.stroke();
+
+  ctx.beginPath();
+  ctx.arc(x, y, 2.8 * avgScale, 0, Math.PI * 2);
+  ctx.fillStyle = '#000';
+  ctx.fill();
+
+  conn.glow = Math.max(conn.glow, 0.9);
+  if (t > 0.85) conn.b.glow = Math.max(conn.b.glow, (t - 0.85) / 0.15);
+  if (t < 0.15) conn.a.glow = Math.max(conn.a.glow, 1 - t / 0.15);
+}
+
+// ── Main loop ─────────────────────────────────────────────────────────────
+let frame = 0;
+let time  = 0;          // smooth time counter for drift (seconds-ish)
+
+function loop() {
+  requestAnimationFrame(loop);
+  frame++;
+  time += 0.016;        // ~60fps → increment by ~1/60 per frame
+
+  ctx.fillStyle = '#fff';
+  ctx.fillRect(0, 0, W, H);
+
+  // Decay glow
+  allNeurons.forEach(n => { if (n.glow > 0) n.glow *= 0.87; });
+  connections.forEach(c => { if (c.glow > 0) c.glow *= 0.84; });
+
+  // Spawn
+  if (frame % SPAWN_EVERY === 0 && signals.length < MAX_SIGNALS) spawnSignal();
+
+  // Advance signals
+  signals.forEach(sig => {
+    const stream = streams[sig.si];
+    sig.progress += sig.speed;
+    if (sig.progress >= stream.length) {
+      sig.si       = Math.floor(Math.random() * streams.length);
+      sig.progress = 0;
+      sig.speed    = BASE_SPEED + Math.random() * SPEED_VAR;
+      streams[sig.si][0].a.glow = 1;
+    }
+  });
+
+  // ── 3D Projection + Drift ───────────────────────────────────────────────
+  angle += 0.005;
+  const cosA  = Math.cos(angle);
+  const sinA  = Math.sin(angle);
+  const focal = Math.min(W, H) * 1.5;
+
+  allNeurons.forEach(n => {
+    const d = n.drift;
+
+    // Compute drifted world-space position
+    const driftX = d.xAmp * Math.sin(time * d.xFreq + d.xPhase);
+    const driftY = d.yAmp * Math.sin(time * d.yFreq + d.yPhase);
+    const driftZ = d.zAmp * Math.sin(time * d.zFreq + d.zPhase);
+
+    const wx = n.baseX + driftX;
+    const wy = n.baseY + driftY;
+    const wz = n.baseZ + driftZ;
+
+    // Rotate around Y axis
+    const rx = wx * cosA - wz * sinA;
+    const rz = wx * sinA + wz * cosA;
+
+    // Perspective
+    const scale = focal / (focal + rz);
+
+    n.x     = W / 2 + rx * scale;
+    n.y     = H / 2 + wy * scale;
+    n.scale = scale;
+    n.z     = rz;
+  });
+
+  // ── Z-sorted render list ────────────────────────────────────────────────
+  const renderList = [];
+
+  connections.forEach(c => {
+    const z = (c.a.z + c.b.z) / 2;
+    renderList.push({ type: 'conn', z, obj: c });
+  });
+
+  allNeurons.forEach(n => {
+    renderList.push({ type: 'neuron', z: n.z, obj: n });
+  });
+
+  signals.forEach(sig => {
+    const stream = streams[sig.si];
+    if (!stream) return;
+    const pos = getPosOnStream(stream, sig.progress);
+    const z   = pos.conn.a.z + (pos.conn.b.z - pos.conn.a.z) * pos.t;
+    renderList.push({ type: 'signal', z, obj: sig, pos });
+  });
+
+  renderList.sort((a, b) => b.z - a.z);
+
+  renderList.forEach(item => {
+    if      (item.type === 'conn')   drawSingleConnection(item.obj);
+    else if (item.type === 'neuron') drawSingleNeuron(item.obj);
+    else if (item.type === 'signal') drawSingleSignal(item.obj, item.pos);
+  });
+}
+
+loop();
+</script>
+</body>
+</html>

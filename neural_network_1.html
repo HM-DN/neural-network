@@ -1,0 +1,269 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Neural Network</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { background: #fff; overflow: hidden; width: 100vw; height: 100vh; }
+    canvas { display: block; }
+  </style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<script>
+const canvas = document.getElementById('c');
+const ctx = canvas.getContext('2d');
+let W = canvas.width = window.innerWidth;
+let H = canvas.height = window.innerHeight;
+
+window.addEventListener('resize', () => {
+  W = canvas.width = window.innerWidth;
+  H = canvas.height = window.innerHeight;
+  init();
+});
+
+const LAYER_DEFS   = [3, 5, 7, 9, 9, 9, 9, 7, 5, 3];
+const INPUT_LABELS  = ['S', 'T', 'D'];
+const OUTPUT_LABELS = ['STUDY', 'TO', 'DEATH'];
+const BRANCH_CUTOFF = 3;          // layer index BEFORE which branching is allowed
+const MAX_SIGNALS   = 55;
+const SPAWN_EVERY   = 5;          // frames between spawns
+const BASE_SPEED    = 0.013;
+const SPEED_VAR     = 0.006;
+
+let layers = [], connections = [], streams = [], signals = [];
+
+// ── Build geometry ───────────────────────────────────────────────────────
+function buildNetwork() {
+  layers = []; connections = [];
+
+  const margin  = W * 0.09;
+  const usableW = W - margin * 2;
+  const gap     = usableW / (LAYER_DEFS.length - 1);
+
+  LAYER_DEFS.forEach((count, li) => {
+    const x       = margin + li * gap;
+    const usableH = H * 0.70;
+    const top     = H * 0.15;
+    const neurons = [];
+    for (let ni = 0; ni < count; ni++) {
+      const y = top + (usableH / (count + 1)) * (ni + 1);
+      neurons.push({ x, y, r: 7, glow: 0 });
+    }
+    layers.push({ x, neurons });
+  });
+
+  for (let li = 0; li < layers.length - 1; li++) {
+    layers[li].neurons.forEach(a => {
+      layers[li + 1].neurons.forEach(b => {
+        const forceAll = (LAYER_DEFS[li] <= 3 || LAYER_DEFS[li + 1] <= 3);
+        if (forceAll || Math.random() < 0.52) {
+          connections.push({ a, b, layer: li, glow: 0 });
+        }
+      });
+    });
+  }
+}
+
+// ── Build streams: full paths input→output ────────────────────────────────
+// Before layer BRANCH_CUTOFF → fan out (multiple branches per neuron).
+// From layer BRANCH_CUTOFF onward → single connection per step, distributed evenly.
+function buildStreams() {
+  streams = [];
+
+  function recurse(neuron, li, path) {
+    if (li === LAYER_DEFS.length - 1) {
+      if (path.length > 0) streams.push(path);
+      return;
+    }
+    const outs = connections.filter(c => c.a === neuron);
+    if (!outs.length) return;
+
+    if (li < BRANCH_CUTOFF) {
+      // fan-out: take several branches
+      const maxFan = li <= 1 ? outs.length : Math.min(outs.length, 3);
+      outs.slice().sort(() => Math.random() - 0.5).slice(0, maxFan)
+          .forEach(conn => recurse(conn.b, li + 1, [...path, conn]));
+    } else {
+      // no branching – pick one connection (cycle through for even distribution)
+      const conn = outs[Math.floor(Math.random() * outs.length)];
+      recurse(conn.b, li + 1, [...path, conn]);
+    }
+  }
+
+  layers[0].neurons.forEach(n => recurse(n, 0, []));
+}
+
+// ── Signals ──────────────────────────────────────────────────────────────
+function makeSignal(streamIdx, startProgress) {
+  return {
+    si:       streamIdx,
+    progress: startProgress ?? 0,
+    speed:    BASE_SPEED + Math.random() * SPEED_VAR,
+  };
+}
+
+function spawnSignal() {
+  if (!streams.length) return;
+  const si = Math.floor(Math.random() * streams.length);
+  signals.push(makeSignal(si, 0));
+}
+
+// Preload the canvas with signals distributed across all paths
+function preloadSignals() {
+  signals = [];
+  const count = Math.min(MAX_SIGNALS, streams.length);
+  for (let i = 0; i < count; i++) {
+    const si = i % streams.length;
+    const progress = (streams[si].length * i) / count % streams[si].length;
+    signals.push(makeSignal(si, progress));
+  }
+}
+
+// ── Init ─────────────────────────────────────────────────────────────────
+function init() {
+  buildNetwork();
+  buildStreams();
+  preloadSignals();
+}
+init();
+
+// ── Draw helpers ──────────────────────────────────────────────────────────
+function getPosOnStream(stream, progress) {
+  const ci  = Math.min(Math.floor(progress), stream.length - 1);
+  const t   = progress - Math.floor(progress);
+  const c   = stream[ci];
+  return {
+    x: c.a.x + (c.b.x - c.a.x) * t,
+    y: c.a.y + (c.b.y - c.a.y) * t,
+    conn: c, t, ci,
+  };
+}
+
+function drawConnections() {
+  connections.forEach(c => {
+    ctx.beginPath();
+    ctx.moveTo(c.a.x, c.a.y);
+    ctx.lineTo(c.b.x, c.b.y);
+    const g = c.glow;
+    ctx.strokeStyle = g > 0 ? `rgba(0,0,0,${0.07 + g * 0.22})` : 'rgba(0,0,0,0.07)';
+    ctx.lineWidth   = g > 0 ? 0.85 : 0.45;
+    ctx.stroke();
+  });
+}
+
+function drawNeurons() {
+  layers.forEach(layer => layer.neurons.forEach(n => {
+    const g = n.glow;
+    if (g > 0.05) {
+      ctx.beginPath();
+      ctx.arc(n.x, n.y, n.r + 6 * g, 0, Math.PI * 2);
+      ctx.fillStyle = `rgba(0,0,0,${0.06 * g})`;
+      ctx.fill();
+    }
+    ctx.beginPath();
+    ctx.arc(n.x, n.y, n.r, 0, Math.PI * 2);
+    ctx.fillStyle   = g > 0.3 ? `rgba(0,0,0,${0.15 + g * 0.85})` : '#fff';
+    ctx.strokeStyle = `rgba(0,0,0,${0.4 + g * 0.6})`;
+    ctx.lineWidth   = 1.4 + g * 0.6;
+    ctx.fill();
+    ctx.stroke();
+  }));
+}
+
+function drawLabels() {
+  layers.forEach((layer, li) => {
+    layer.neurons.forEach((n, ni) => {
+      if (li === 0 && ni < INPUT_LABELS.length) {
+        ctx.font         = 'bold 10px monospace';
+        ctx.textAlign    = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillStyle    = n.glow > 0.4 ? '#fff' : '#000';
+        ctx.fillText(INPUT_LABELS[ni], n.x, n.y);
+      }
+      if (li === layers.length - 1 && ni < OUTPUT_LABELS.length) {
+        ctx.font         = 'bold 9px monospace';
+        ctx.textAlign    = 'left';
+        ctx.textBaseline = 'middle';
+        ctx.fillStyle    = '#000';
+        ctx.fillText(OUTPUT_LABELS[ni], n.x + n.r + 5, n.y);
+      }
+    });
+  });
+}
+
+function drawSignals() {
+  signals.forEach(sig => {
+    const stream = streams[sig.si];
+    if (!stream) return;
+
+    const { x, y, conn, t } = getPosOnStream(stream, sig.progress);
+
+    // Trail: stay within current connection segment to avoid cross-node artifacts
+    const trailT  = Math.max(0, t - 0.14);
+    const trailX  = conn.a.x + (conn.b.x - conn.a.x) * trailT;
+    const trailY  = conn.a.y + (conn.b.y - conn.a.y) * trailT;
+
+    ctx.beginPath();
+    ctx.moveTo(trailX, trailY);
+    ctx.lineTo(x, y);
+    ctx.strokeStyle = `rgba(0,0,0,${0.28 * (1 - t * 0.35)})`;
+    ctx.lineWidth   = 1.3;
+    ctx.stroke();
+
+    ctx.beginPath();
+    ctx.arc(x, y, 2.8, 0, Math.PI * 2);
+    ctx.fillStyle = '#000';
+    ctx.fill();
+
+    // Light up connection & destination neuron
+    conn.glow = Math.max(conn.glow, 0.9);
+    if (t > 0.85) conn.b.glow = Math.max(conn.b.glow, (t - 0.85) / 0.15);
+    if (t < 0.15) conn.a.glow = Math.max(conn.a.glow, 1 - t / 0.15);
+  });
+}
+
+// ── Main loop ─────────────────────────────────────────────────────────────
+let frame = 0;
+
+function loop() {
+  requestAnimationFrame(loop);
+  frame++;
+
+  ctx.fillStyle = '#fff';
+  ctx.fillRect(0, 0, W, H);
+
+  // Decay glow
+  layers.forEach(l => l.neurons.forEach(n => { if (n.glow > 0) n.glow *= 0.87; }));
+  connections.forEach(c => { if (c.glow > 0) c.glow *= 0.84; });
+
+  // Spawn new signals
+  if (frame % SPAWN_EVERY === 0 && signals.length < MAX_SIGNALS) spawnSignal();
+
+  // Advance signals — loop immediately on completion (no pause)
+  signals.forEach(sig => {
+    const stream = streams[sig.si];
+    sig.progress += sig.speed;
+
+    if (sig.progress >= stream.length) {
+      // Immediate loop: pick a new stream and restart from 0
+      sig.si       = Math.floor(Math.random() * streams.length);
+      sig.progress = 0;
+      sig.speed    = BASE_SPEED + Math.random() * SPEED_VAR;
+      // Flash input neuron
+      streams[sig.si][0].a.glow = 1;
+    }
+  });
+
+  drawConnections();
+  drawSignals();
+  drawNeurons();
+  drawLabels();
+}
+
+loop();
+</script>
+</body>
+</html>
